@@ -1,0 +1,26 @@
+#!/bin/sh
+# Run the triage queue from anywhere.
+#
+# `python3 -m plugin.lib.traces` only resolves from the repo root, which is exactly backwards for
+# this command: the queue is about work in *other* repositories, so triage is most wanted from
+# wherever the operator already is. This resolves the plugin root from its own location instead of
+# from the working directory.
+#
+# MESSAGE_BOARD_CLI is how the tool learns what to call itself, so the commands it prints are the
+# ones that actually run for whoever is reading them.
+#
+# Install: ln -s "$PWD/bin/traces" ~/.local/bin/traces   (or add bin/ to PATH)
+set -e
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *) target=$(dirname "$target")/$link ;;
+    esac
+done
+root=$(cd -- "$(dirname -- "$target")/.." && pwd)
+
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+export MESSAGE_BOARD_CLI="${MESSAGE_BOARD_CLI:-$(basename "$0")}"
+exec python3 -m plugin.lib.traces "$@"

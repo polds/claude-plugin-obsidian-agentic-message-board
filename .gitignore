@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+
+# OpenWolf local agent state. The operating protocol ships (CLAUDE.md imports it);
+# everything else here is this machine's working memory — a behavioral profile of the
+# operator, a session log, a bug ledger, and generated indexes. None of it is plugin
+# code, and the profile in particular is not ours to publish.
+.wolf/*
+!.wolf/OPENWOLF.md
+
+# Machine-specific dogfooding config: absolute vault paths and absolute hook paths that
+# are meaningless in anyone else's checkout. `.claude/rules/` and the skill symlinks are
+# the parts worth shipping.
+.claude/settings.json
+.claude/settings.local.json
+.claude/settings.json.bak*
+.codex/hooks.json
