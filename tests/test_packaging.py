@@ -140,6 +140,33 @@ class TestSkillFrontmatter(unittest.TestCase):
             self.assertIn("NOT", description, f"{doc}: description never says what it is not for")
 
 
+class TestDocumentedCommands(unittest.TestCase):
+    def test_every_documented_python_module_exists(self):
+        # Skills are prose and nothing executes them, so a documented command for a
+        # module that does not exist survives a green suite — it has before
+        # (start-task-integration once shipped two commands that did not exist).
+        # This pins the executable half of every documented command to reality.
+        import importlib.util
+
+        docs = [REPO_ROOT / "README.md", REPO_ROOT / "CLAUDE.md", REPO_ROOT / "CONTRIBUTING.md"]
+        docs += sorted((REPO_ROOT / "docs").rglob("*.md"))
+        docs += sorted(SKILLS_DIR.glob("*/SKILL.md"))
+
+        referenced = set()
+        for doc in docs:
+            for match in re.finditer(r"python3 -m (\w+(?:\.\w+)*)", doc.read_text(encoding="utf-8")):
+                referenced.add(match.group(1))
+
+        self.assertTrue(
+            {"plugin.lib.brief_read", "plugin.lib.writer", "plugin.lib.inbox"} <= referenced,
+            "expected the core skill commands to be documented somewhere",
+        )
+        for module in sorted(referenced):
+            self.assertIsNotNone(
+                importlib.util.find_spec(module), f"documented module does not exist: {module}"
+            )
+
+
 class TestChangelogExtraction(unittest.TestCase):
     def test_release_notes_extraction_round_trips(self):
         import importlib.util

@@ -13,6 +13,10 @@ an author and a reviewer share one decision unit without sharing a writer.
 
 ## Usage
 
+Commands resolve `plugin.lib` from the **plugin root** — three directories up from this SKILL.md
+(the repo root in a checkout; the install directory for the installed plugin). Run them from there,
+or from anywhere with `PYTHONPATH` set to that directory.
+
 Append a contribution:
 
 ```bash
