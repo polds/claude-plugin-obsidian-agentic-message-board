@@ -14,6 +14,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A Claude Code **plugin** that gives parallel agent workstreams a shared handoff surface, persisted as
 Markdown notes in an **Obsidian vault**.
 
+The tagline, and the outcome every change is measured against: **"Operator Cognition Framework:
+agents remember, so the operator doesn't have to ask."** Read the two halves precisely — the memory
+belongs to the *agents* (briefs are written for the next agent; constraint 5 below), and the
+operator's not-having-to-ask is the *payoff*, delivered by the dashboard rendering those same briefs.
+A change that strengthens one half by weakening the other — operator-skimmable briefs, agent-side
+state the dashboard can't render — is misaligned even if it looks like an improvement.
+
 The problem it exists to solve: one operator running many concurrent Claude sessions becomes the
 bottleneck, because rebuilding context on any given workstream requires asking that session "what's
 the status." The plugin's job is to make that context reconstructable without reading the
@@ -23,14 +30,18 @@ The design direction is settled. Read `docs/ideas/agent-handoff-board.md` before
 architecture — it records not just what was chosen but what was explicitly rejected and why, so those
 decisions don't get relitigated.
 
-Implementation is underway against `tasks/plan.md`. The read path, write path, claim resolution, inbox,
-and dashboard exist in `plugin/`; hooks, minting, and traces do not yet. When reality and this file
-disagree, reality wins — fix this file.
+Implementation is underway against `tasks/plan.md`. The read path, write path, claim resolution,
+minting, traces, inbox, dashboard, and both hooks exist in `plugin/` with tests; hooks are wired
+through `.claude-plugin/hooks.json` and the skills are dogfooded via `.claude/skills/` symlinks. What
+remains is live validation — the plan's Checkpoint C (one real workstream end-to-end against a
+scratch vault) and Checkpoint D (a week of real use before anything beyond MVP scope). When reality
+and this file disagree, reality wins — fix this file.
 
 Two consumers, one codebase:
 
-- **The plugin** (`.claude-plugin/` + `skills/`, `commands/`, `agents/`, `hooks/`) — the shippable
-  artifact other people install.
+- **The plugin** (`.claude-plugin/` + `plugin/` — skills in `plugin/skills/`, hooks in
+  `plugin/hooks/` wired by `.claude-plugin/hooks.json`) — the shippable artifact other people
+  install.
 - **`.claude/`** — this repo dogfooding its own plugin during development. Exercise changes here
   before shipping them.
 
