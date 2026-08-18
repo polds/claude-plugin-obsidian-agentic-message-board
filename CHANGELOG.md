@@ -44,6 +44,9 @@ Initial release: the full MVP from `tasks/plan.md`.
   (`skills` → `plugin/skills/`, `hooks` → `.claude-plugin/hooks.json`) so an installed plugin
   actually ships them.
 - Two real-world fixture streams under `examples/` and a stdlib-only `unittest` suite.
+- **Docs**: getting-started walk-through for operators and contributors, `CONTRIBUTING.md` with
+  the enforced testing standards and release process, `SECURITY.md` with the trust model, and
+  `docs/roadmap.md` tying the North Star to the measurements that validate it.
 
 ### Fixed
 
