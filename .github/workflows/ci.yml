@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        # Floor is 3.10: the library uses PEP 604 union syntax. Stdlib only — no
+        # install step here is load-bearing, not an omission (see CLAUDE.md).
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        include:
+          - os: macos-latest
+            python: '3.13'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Byte-compile shipped code
+        run: python3 -m compileall -q plugin/
+
+      - name: Run test suite
+        run: python3 -m unittest discover -s tests
+
+      - name: Fixtures stayed byte-identical
+        # examples/ is read-only fixture input transcribed from real streams. A test
+        # that mutates it passes silently and corrupts every later run, so the
+        # invariant is enforced here rather than trusted.
+        run: |
+          git diff --exit-code -- examples/
+          untracked="$(git status --porcelain -- examples/)"
+          if [ -n "$untracked" ]; then
+            echo "examples/ changed or gained files during the test run:" >&2
+            echo "$untracked" >&2
+            exit 1
+          fi
