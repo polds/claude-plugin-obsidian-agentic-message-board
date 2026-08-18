@@ -15,6 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_MANIFEST = REPO_ROOT / ".claude-plugin" / "plugin.json"
 HOOKS_CONFIG = REPO_ROOT / ".claude-plugin" / "hooks.json"
+MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 SKILLS_DIR = REPO_ROOT / "plugin" / "skills"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 
@@ -56,12 +57,61 @@ class TestPluginManifest(unittest.TestCase):
         changelog = CHANGELOG.read_text(encoding="utf-8")
         self.assertIn(f"## [{manifest['version']}]", changelog)
 
+    def test_manifest_declares_the_non_default_component_paths(self):
+        # Skills live in plugin/skills/ and the hook config in .claude-plugin/ —
+        # neither is an auto-discovery location, so without these fields an installed
+        # plugin ships with no skills and no hooks, and nothing else would notice.
+        manifest = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(manifest.get("skills"), "./plugin/skills/")
+        self.assertEqual(manifest.get("hooks"), "./.claude-plugin/hooks.json")
+
+
+class TestMarketplace(unittest.TestCase):
+    def test_marketplace_parses_with_required_fields(self):
+        market = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
+        self.assertTrue(market["name"])
+        self.assertTrue(market["owner"]["name"])
+        self.assertTrue(market["plugins"])
+
+    def test_marketplace_lists_this_plugin_at_the_repo_root(self):
+        market = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
+        manifest = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+        entries = {p["name"]: p for p in market["plugins"]}
+        self.assertIn(manifest["name"], entries)
+        self.assertEqual(entries[manifest["name"]]["source"], "./")
+
 
 class TestHooksConfig(unittest.TestCase):
     def test_hooks_config_parses_and_registers_both_session_hooks(self):
         config = json.loads(HOOKS_CONFIG.read_text(encoding="utf-8"))
         self.assertIn("SessionStart", config["hooks"])
         self.assertIn("SessionEnd", config["hooks"])
+
+    def test_hook_commands_resolve_inside_the_plugin(self):
+        # ${CLAUDE_PLUGIN_ROOT} expands to the plugin root — the directory containing
+        # .claude-plugin/ — so a command path containing ".." escapes the installed
+        # plugin and breaks only at install time, which nothing else exercises. This
+        # repo shipped exactly that bug once.
+        config = json.loads(HOOKS_CONFIG.read_text(encoding="utf-8"))
+        commands = [
+            hook["command"]
+            for event in config["hooks"].values()
+            for matcher in event
+            for hook in matcher["hooks"]
+        ]
+        self.assertTrue(commands, "no hook commands registered")
+        for command in commands:
+            match = re.search(r'\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)', command)
+            self.assertIsNotNone(
+                match, f"hook command must locate its script via ${{CLAUDE_PLUGIN_ROOT}}: {command}"
+            )
+            relative = match.group(1)
+            self.assertNotIn(
+                "..", relative.split("/"), f"hook path escapes the plugin root: {command}"
+            )
+            self.assertTrue(
+                (REPO_ROOT / relative).is_file(), f"hook script does not exist: {relative}"
+            )
 
     def test_hook_sources_compile(self):
         hook_sources = sorted((REPO_ROOT / "plugin" / "hooks").glob("*.py"))

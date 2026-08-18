@@ -36,5 +36,18 @@ Initial release: the full MVP from `tasks/plan.md`.
 - **Doctor**: `plugin.lib.doctor` reports whether the board is actually wired up, because an
   unconfigured board and an empty board are silent in the same way.
 - **CI/CD**: test matrix across Python 3.10–3.14 on Linux and macOS, fixture-immutability guard,
-  packaging structure tests, and a tag-driven release pipeline publishing notes from this file.
+  packaging structure tests, `claude plugin validate` in CI, and a tag-driven release pipeline
+  publishing notes from this file.
+- **Marketplace**: `.claude-plugin/marketplace.json` makes this repo its own plugin marketplace —
+  `/plugin marketplace add polds/claude-plugin-obsidian-agentic-message-board`, then
+  `/plugin install message-board@polds`. The manifest declares the non-default component paths
+  (`skills` → `plugin/skills/`, `hooks` → `.claude-plugin/hooks.json`) so an installed plugin
+  actually ships them.
 - Two real-world fixture streams under `examples/` and a stdlib-only `unittest` suite.
+
+### Fixed
+
+- Hook commands escaped the installed plugin: `${CLAUDE_PLUGIN_ROOT}` expands to the plugin root,
+  so `${CLAUDE_PLUGIN_ROOT}/../plugin/hooks/…` pointed outside it and both session hooks would
+  silently never fire for anyone who installed the plugin. Paths are corrected and a packaging
+  test now fails on any hook command containing `..` or referencing a missing script.
