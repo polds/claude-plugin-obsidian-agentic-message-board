@@ -7,6 +7,13 @@
 **How might we let one operator hold 10 parallel agent workstreams in their head at any
 moment, without reading 10 conversations?**
 
+*Framing adopted 2026-08-18:* **"Operator Cognition Framework: agents remember, so the operator
+doesn't have to ask."** The memory is the agents'; the operator's freedom from asking is the
+outcome. An earlier phrasing — "an agentic memory system *for operators*" — was rejected because it
+inverts the brief's primary audience (the next agent, not the operator; see Recommended Direction)
+and lands on the wrong side of the Honcho wall, where operator-modeling memory lives and
+stream-scoped memory must never go.
+
 ## Recommended Direction
 
 **Handoff-document first, ledger second, queue only if routing hurts.**

@@ -1,7 +1,7 @@
 {
   "name": "message-board",
   "version": "0.1.0",
-  "description": "Agent handoff board. Each workstream owns a BRIEF.md in an external Obsidian vault; agents cold-start by reading it, hooks record mechanical ground truth, and a dashboard replaces asking every session for status.",
+  "description": "Operator Cognition Framework: agents remember, so the operator doesn't have to ask. An agent handoff board — each workstream owns a BRIEF.md in an external Obsidian vault; agents cold-start by reading it, hooks record mechanical ground truth, and a dashboard replaces asking every session for status.",
   "author": {
     "name": "polds"
   },
@@ -10,7 +10,9 @@
     "obsidian",
     "multi-agent",
     "context",
-    "status"
+    "status",
+    "memory",
+    "operator"
   ],
   "homepage": "https://github.com/polds/claude-plugin-obsidian-agentic-message-board",
   "repository": "https://github.com/polds/claude-plugin-obsidian-agentic-message-board",

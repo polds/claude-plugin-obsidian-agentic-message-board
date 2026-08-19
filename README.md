@@ -1,5 +1,7 @@
 # message-board
 
+> **Operator Cognition Framework** — agents remember, so the operator doesn't have to ask.
+
 An agent handoff board. Every workstream owns one `BRIEF.md` in an external Obsidian vault. Agents
 cold-start by reading it, hooks record mechanical ground truth beside it, and a terminal dashboard
 replaces asking each running session "what's the status."
