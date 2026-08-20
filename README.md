@@ -2,6 +2,11 @@
 
 > **Operator Cognition Framework** — agents remember, so the operator doesn't have to ask.
 
+[![CI](https://github.com/polds/claude-plugin-obsidian-agentic-message-board/actions/workflows/ci.yml/badge.svg)](https://github.com/polds/claude-plugin-obsidian-agentic-message-board/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/polds/claude-plugin-obsidian-agentic-message-board?include_prereleases)](https://github.com/polds/claude-plugin-obsidian-agentic-message-board/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+
 An agent handoff board. Every workstream owns one `BRIEF.md` in an external Obsidian vault. Agents
 cold-start by reading it, hooks record mechanical ground truth beside it, and a terminal dashboard
 replaces asking each running session "what's the status."
@@ -17,18 +22,41 @@ axis — cheaper, inspectable, diffable, replayable, and it survives the session
 consumer is *the next agent*, not the operator; the dashboard is a rendering of the same briefs, so
 there is one artifact and one write path serving two audiences.
 
-## Setup
+## Getting started
+
+Install the plugin from this repo's own marketplace, inside Claude Code:
+
+```
+/plugin marketplace add polds/claude-plugin-obsidian-agentic-message-board
+/plugin install message-board@polds
+```
+
+Then give the board its vault — external, never inside a repo:
 
 ```bash
 export MESSAGE_BOARD_VAULT=~/vaults/agent-board
 mkdir -p "$MESSAGE_BOARD_VAULT/streams" && git -C "$MESSAGE_BOARD_VAULT" init
 ```
 
-The vault is external and never lives in this repo. `git init` is not optional — it is what makes
-brief overwrites non-destructive and trace pruning recoverable, and it is why this design defers
-event sourcing entirely.
+`git init` is not optional — it is what makes brief overwrites non-destructive and trace pruning
+recoverable, and it is why this design defers event sourcing entirely.
+
+One gotcha decides whether anything works: **hooks run in non-interactive shells**, which do not
+source `~/.zshrc`, so an `export` there is invisible to them. Put the path where hooks can see it —
+an `"env"` block in your Claude settings:
+
+```json
+{ "env": { "MESSAGE_BOARD_VAULT": "/absolute/path/to/agent-board" } }
+```
+
+The full walk-through — including contributor setup and how to verify the wiring — is in
+[docs/getting-started.md](docs/getting-started.md). The plugin is deliberately silent when
+unconfigured; `python3 -m plugin.lib.doctor` (from a checkout) reports the difference between
+"working, nothing to say" and "misconfigured."
 
 ## Use
+
+All commands run from the plugin root — a checkout of this repo, or the installed plugin directory.
 
 ```bash
 python3 -m plugin.dashboard                          # all streams, operator asks first
@@ -36,6 +64,7 @@ python3 -m plugin.lib.brief_read <slug>              # cold-start on one stream
 python3 -m plugin.lib.writer --help                  # record a decision (owner only)
 python3 -m plugin.lib.inbox --help                   # contribute as a non-owner
 python3 -m plugin.lib.traces --help                  # triage the unassigned queue
+python3 -m plugin.lib.doctor                         # is the board actually wired up?
 ```
 
 ## Stream layout
@@ -113,7 +142,19 @@ python3 -m unittest tests.test_claims -v         # one module
 ```
 
 Stdlib only, no install step. `examples/` is hand-verified real fixture data — a design stream and a
-closed code review — and must stay byte-identical; tests build their vaults in `tempfile`.
+closed code review — and must stay byte-identical; tests build their vaults in `tempfile`, and CI
+enforces both. See [CONTRIBUTING.md](CONTRIBUTING.md) for the testing standards and release process.
 
-Design rationale and explicitly rejected alternatives: `docs/ideas/agent-handoff-board.md`.
-Schema: `docs/spec/brief-schema.md`. Working agents should read `CLAUDE.md` first.
+## Documentation
+
+| Document | What it holds |
+|---|---|
+| [docs/getting-started.md](docs/getting-started.md) | Full install and setup walk-through, for operators and contributors |
+| [docs/spec/brief-schema.md](docs/spec/brief-schema.md) | The `BRIEF.md` schema — the wire format everything else derives from |
+| [docs/ideas/agent-handoff-board.md](docs/ideas/agent-handoff-board.md) | Design rationale, and the alternatives explicitly rejected so they stay rejected |
+| [docs/roadmap.md](docs/roadmap.md) | The North Star and what stands between here and it |
+| [CHANGELOG.md](CHANGELOG.md) | Releases; the manifest version's section becomes the release notes |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, testing standards, release process |
+| [SECURITY.md](SECURITY.md) | Reporting vulnerabilities; the trust model |
+
+Working agents should read `CLAUDE.md` first.

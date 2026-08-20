@@ -1,0 +1,15 @@
+{
+  "name": "polds",
+  "owner": {
+    "name": "polds",
+    "url": "https://github.com/polds"
+  },
+  "description": "Plugins by polds. Currently: message-board, the Operator Cognition Framework.",
+  "plugins": [
+    {
+      "name": "message-board",
+      "source": "./",
+      "description": "Operator Cognition Framework: agents remember, so the operator doesn't have to ask. An agent handoff board — each workstream owns a BRIEF.md in an external Obsidian vault; agents cold-start by reading it, hooks record mechanical ground truth, and a dashboard replaces asking every session for status."
+    }
+  ]
+}

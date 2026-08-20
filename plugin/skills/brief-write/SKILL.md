@@ -11,6 +11,10 @@ this session can act on it.
 
 ## Usage
 
+Commands resolve `plugin.lib` from the **plugin root** — three directories up from this SKILL.md
+(the repo root in a checkout; the install directory for the installed plugin). Run them from there,
+or from anywhere with `PYTHONPATH` set to that directory.
+
 ```bash
 python3 -m plugin.lib.writer decide  <slug> "<decision>" "<why>"
 python3 -m plugin.lib.writer entry   <slug> "Open|Next|Do not" "<text>"

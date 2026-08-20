@@ -31,7 +31,11 @@ about what the work is called.
 
 Registration is still **lazy** — creating a worktree is not itself durable work, and a stream minted
 at dispatch for a task that produces nothing is exactly the empty-stream flooding the bar exists to
-prevent. So do not mint here. Instead, carry the dispatch context into the first durable write:
+prevent. So do not mint here. Instead, carry the dispatch context into the first durable write.
+(As in every skill here, `python3 -m plugin.lib.…` resolves from the **plugin root** — three
+directories up from this SKILL.md; run from there or set `PYTHONPATH` to it, which matters in this
+skill especially, because the command below runs from the task's new worktree, not from a
+message-board checkout.)
 
 ```bash
 python3 -m plugin.lib.mint write --kind decision \
