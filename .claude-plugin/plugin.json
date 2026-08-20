@@ -16,5 +16,7 @@
   ],
   "homepage": "https://github.com/polds/claude-plugin-obsidian-agentic-message-board",
   "repository": "https://github.com/polds/claude-plugin-obsidian-agentic-message-board",
-  "license": "MIT"
+  "license": "MIT",
+  "skills": "./plugin/skills/",
+  "hooks": "./.claude-plugin/hooks.json"
 }

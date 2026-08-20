@@ -1,0 +1,42 @@
+name: Release
+
+# A release is a `v<version>` tag pushed to this repo. The workflow refuses to
+# publish unless the tag matches the plugin manifest version and the changelog
+# has a section for it, so a release can never silently disagree with either.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Run test suite
+        run: python3 -m unittest discover -s tests
+
+      - name: Tag matches plugin manifest
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "Tag v$TAG does not match .claude-plugin/plugin.json version $VERSION" >&2
+            exit 1
+          fi
+
+      - name: Extract release notes from CHANGELOG.md
+        run: python3 .github/scripts/extract_changelog.py "${GITHUB_REF_NAME#v}" > release-notes.md
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md

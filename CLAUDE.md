@@ -41,7 +41,9 @@ Two consumers, one codebase:
 
 - **The plugin** (`.claude-plugin/` + `plugin/` — skills in `plugin/skills/`, hooks in
   `plugin/hooks/` wired by `.claude-plugin/hooks.json`) — the shippable artifact other people
-  install.
+  install. Neither location is an auto-discovery default, so `plugin.json` must keep declaring
+  them via its `skills` and `hooks` fields; `marketplace.json` makes this repo its own
+  marketplace (`/plugin install message-board@polds`).
 - **`.claude/`** — this repo dogfooding its own plugin during development. Exercise changes here
   before shipping them.
 
