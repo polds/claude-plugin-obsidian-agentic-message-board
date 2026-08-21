@@ -145,6 +145,18 @@ class TestExpandClaims(StreamBuilder):
         self.assertEqual(issue.url, "https://linear.app/acme/issue/PLAT-1962")
         self.assertTrue(issue.certain)
 
+    def test_a_linear_base_that_already_ends_in_issue_is_not_doubled(self):
+        """The operator pastes the prefix the browser shows, which includes `/issue`.
+
+        Doubling it produces `.../issue/issue/KEY` — dead, but plausible enough in a rendered brief
+        that nobody clicks it to find out.
+        """
+        brief = self.brief(issue="ACME-12")
+        for base in ("https://linear.app/acme/issue", "https://linear.app/acme/issue/"):
+            env = {refs.ISSUE_BASE_ENV: base}
+            issue = [r for r in refs.expand_claims(brief, env=env) if r.kind == "issue"][0]
+            self.assertEqual(issue.url, "https://linear.app/acme/issue/ACME-12", base)
+
     def test_jira_style_issue_base_appends_the_key_directly(self):
         brief = self.brief(issue="ACME-12")
         env = {refs.ISSUE_BASE_ENV: "https://acme.atlassian.net/browse"}

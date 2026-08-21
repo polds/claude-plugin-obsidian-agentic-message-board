@@ -138,10 +138,28 @@ def check_skills(project: Path) -> Check:
     return Check(OK, "skills discoverable", ", ".join(sorted(found)))
 
 
+def check_ignored(env: dict[str, str] | None = None) -> Check:
+    """Report ignore rules, because a silencing rule the operator forgot is indistinguishable from a
+    broken hook — which is the exact confusion this whole module exists to remove."""
+    from plugin.hooks import session_end
+
+    rules = session_end.ignored_dirs(env)
+    if not rules:
+        return Check(OK, "ignore rules", "none — every unresolved session leaves a trace")
+    listed = ", ".join(str(r) for r in rules)
+    return Check(
+        OK,
+        "ignore rules",
+        f"{len(rules)} configured: {listed} (non-repo directories only)",
+    )
+
+
 def run(project: Path, env: dict[str, str] | None = None, probe=probe_non_interactive_shell) -> list[Check]:
+    merged = effective_env(project, env)
     return [
         check_env_reaches_hooks(project, env, probe),
-        check_vault(effective_env(project, env)),
+        check_ignored(merged),
+        check_vault(merged),
         check_hooks(project),
         check_skills(project),
     ]

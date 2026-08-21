@@ -11,12 +11,19 @@ import sys
 from . import refs, vault
 
 
-def render(brief: vault.Brief) -> str:
+def render(brief: vault.Brief, env: dict[str, str] | None = None) -> str:
+    """Render a brief for a cold-start reader. `env` supplies forge and issue-tracker configuration.
+
+    Threaded through rather than left to `os.environ` because what it configures — whether an issue
+    reference is a certain link or a guess — decides what reaches the body. A caller that cannot set
+    it can only assert against the environment it happens to run in, which is a test that passes or
+    fails on the developer's shell rather than on the code.
+    """
     resolved = vault.resolve_transclusions(brief)
     # Claims and body citations are expanded to URLs here because a cold-start reader has no repo
     # access to resolve `a1b2c3d4e` or `#1025` by hand. Guessed links never reach the body — a wrong
     # link costs more than an unlinked reference.
-    ctx = refs.reference_context(brief)
+    ctx = refs.reference_context(brief, env)
     lines = [
         f"# {brief.title or brief.slug}",
         "",

@@ -84,6 +84,21 @@ DEFAULT_RETENTION_DAYS = 30
 # the queue unworkable.
 WORK_ITEM_KEYS = ("repo", "branch")
 
+# Branches that identify a repository rather than a piece of work. The design already refuses to
+# *claim* one — "it would resolve everything, and therefore nothing" — and grouping has the same
+# defect for the same reason: on a feature branch the branch is the work, on a default branch it is
+# just where everybody happens to be standing. Thirteen unrelated sessions were being offered for
+# adoption into a single stream named `main`.
+#
+# So a default branch falls through to the session, exactly as a missing repo falls through to the
+# directory. That is per-session triage, which the reframe otherwise rejects — but here it is honest:
+# nothing binds these sessions together, and pretending otherwise produces a stream whose contents
+# contradict its goal.
+DEFAULT_BRANCHES = {"main", "master", "trunk", "develop", "default"}
+
+# Enough of a session id to be unique in a queue while staying typeable.
+SESSION_REF_CHARS = 8
+
 # Placeholder goal for a stream minted by adoption. Deliberately conspicuous: minting is justified
 # (the operator looked at the queue and judged the work real), but the *goal* is genuinely unwritten,
 # and a plausible-sounding invented one is worse than an obviously blank one. `adopt` also files an
@@ -178,16 +193,22 @@ class Trace:
         return self.promoted or self.dismissed
 
     def work_item_key(self) -> tuple[str, str, str]:
-        """(repo, branch, directory) — the directory only when there is no repo and no branch.
+        """(repo, branch, discriminator) — the third slot only when the first two identify nothing.
 
-        Sessions outside any checkout have neither, and grouping them all under `n/a @ n/a` merges
-        unrelated directories into one undismissable blob whose only handle is a listing index that
-        renumbers. Falling back to the working directory keeps each one separately addressable.
+        Sessions outside any checkout have neither repo nor branch, and grouping them all under
+        `n/a @ n/a` merges unrelated directories into one undismissable blob whose only handle is a
+        listing index that renumbers. A session on a default branch has the same problem for a
+        different reason: `main` names the repository, not the work.
+
+        Both fall through to something finer — the working directory in the first case, the session
+        in the second — so each stays separately addressable.
         """
         repo = self.repo or ABSENT
         branch = self.branch or ABSENT
         if repo == ABSENT and branch == ABSENT:
             return (repo, branch, self.cwd or ABSENT)
+        if branch.lower() in DEFAULT_BRANCHES:
+            return (repo, branch, f"session:{self.session or 'unknown'}")
         return (repo, branch, "")
 
     def created_at(self) -> datetime | None:
@@ -452,6 +473,10 @@ class WorkItem:
     # Identity of last resort for a session that ran outside any checkout. Never a claim — a
     # directory is a worktree, and `adopt` registers it as one rather than as a branch.
     where: str = ""
+    # Set when the branch is a default branch and therefore identifies the repo, not the work. Such
+    # items are shown clustered under their repo so the listing does not become a wall, but they are
+    # separate items because nothing binds them together.
+    session: str = ""
     traces: list[Trace] = field(default_factory=list)
     claimed_by: str = ""
 
@@ -461,6 +486,9 @@ class WorkItem:
 
     @property
     def label(self) -> str:
+        if self.session:
+            subject = self.summaries[0] if self.summaries else "(no subject recorded)"
+            return f"{subject}  [{self.session_ref}]"
         return f"{self.repo} @ {self.branch or ABSENT}" + (f" ({self.where})" if self.where else "")
 
     @property
@@ -479,7 +507,21 @@ class WorkItem:
 
     @property
     def key(self) -> str:
-        return f"{self.repo}@{self.branch}" + (f"@{self.where}" if self.where else "")
+        tail = self.where or self.session
+        return f"{self.repo}@{self.branch}" + (f"@{tail}" if tail else "")
+
+    @property
+    def cluster(self) -> str:
+        """The `repo@branch` these session-scoped items share, or "" for an ordinary item.
+
+        A cluster is a display grouping and a bulk-dismiss handle, never an adoptable thing: the
+        whole reason these are separate items is that they are separate work.
+        """
+        return f"{self.repo}@{self.branch}" if self.session else ""
+
+    @property
+    def session_ref(self) -> str:
+        return self.session[:SESSION_REF_CHARS] if self.session else ""
 
     def selector(self, among: Sequence["WorkItem"] = (), index: int = 0) -> str:
         """The shortest identifier that still names this item after the queue changes.
@@ -488,6 +530,8 @@ class WorkItem:
         command copied from the same listing targets a different work item than the operator read —
         and unlike an out-of-range index, a shifted-but-valid one fails silently by succeeding.
         """
+        if self.session:
+            return self.session_ref
         if self.where:
             return self.where
         if self.branch != ABSENT:
@@ -584,18 +628,44 @@ def work_items(traces: list[Trace], streams: Sequence[vault.Brief] = ()) -> list
         key = trace.work_item_key()
         item = grouped.get(key)
         if item is None:
-            item = grouped[key] = WorkItem(repo=key[0], branch=key[1], where=key[2])
+            tail = key[2]
+            item = grouped[key] = WorkItem(
+                repo=key[0],
+                branch=key[1],
+                where="" if tail.startswith("session:") else tail,
+                session=tail[len("session:"):] if tail.startswith("session:") else "",
+            )
         item.traces.append(trace)
 
     for item in grouped.values():
-        for brief in streams:
-            if item.branch != ABSENT and item.branch in brief.claim("branch"):
-                item.claimed_by = brief.slug
-                break
-            if item.worktrees and set(item.worktrees) & set(brief.claim("worktree")):
-                item.claimed_by = brief.slug
-                break
+        item.claimed_by = _claiming_stream(item, streams)
     return list(grouped.values())
+
+
+def _claiming_stream(item: WorkItem, streams: Sequence[vault.Brief]) -> str:
+    """The stream that already owns this work, by the resolver's rules and not a looser set of them.
+
+    A naive path intersection was wrong here in the direction that costs the most. The main clone of
+    a repository is the working directory of *everything* in that repository, so a stream claiming it
+    matched every work item in the repo — and the listing then invited the operator to file a dozen
+    unrelated sessions into one stream. That is `main`-as-a-claim wearing a different hat.
+
+    `claims.worktree_claim_is_live` is the rule the read path already applies: a worktree claim only
+    counts while that checkout is still on one of the stream's claimed branches. Reusing it is the
+    point — a listing that says "claimed by X" while resolution would never choose X is worse than
+    one that says nothing, because the operator acts on it.
+    """
+    for brief in streams:
+        if item.branch != ABSENT:
+            claimed = [claims_lib.normalize_claim("branch", b) for b in brief.claim("branch")]
+            if claims_lib.normalize_claim("branch", item.branch) in [c for c in claimed if c]:
+                return brief.slug
+        for worktree in item.worktrees:
+            if worktree in brief.claim("worktree") and claims_lib.worktree_claim_is_live(
+                brief, worktree
+            ):
+                return brief.slug
+    return ""
 
 
 def _age_text(age: float | None) -> str:
@@ -624,53 +694,82 @@ def render_queue(
     taken = [brief.slug for brief in streams]
 
     lines = [f"{len(items)} work item(s) waiting ({len(traces)} traces):", ""]
+    printed_cluster = ""
     for index, item in enumerate(items, start=1):
         oldest, newest = item.age_span(now)
         span = _age_text(oldest) if oldest == newest else f"{_age_text(oldest)}–{_age_text(newest)}"
-        # Quoted so a branch containing a shell metacharacter stays one argument when copied.
         picked = item.selector(items, index)
         ref = picked if picked.isdigit() else f"'{picked}'"
-        lines.append(f"[{index}] {item.label}")
+
+        # Session-scoped items share a heading so a busy default branch does not become a wall of
+        # near-identical rows. The heading is also the bulk-dismiss handle, which is the common case:
+        # most of what accumulates on a default branch is noise, and clearing it should cost one
+        # command rather than one per session.
+        if item.cluster and item.cluster != printed_cluster:
+            printed_cluster = item.cluster
+            siblings = [other for other in items if other.cluster == item.cluster]
+            lines.append(f"{item.repo} @ {item.branch} — {len(siblings)} session(s), nothing shared")
+            lines.append(
+                f"    a default branch names the repo, not the work; each session stands alone"
+            )
+            lines.append(
+                f"    dismiss all: {cli} dismiss '{item.cluster}' --why \"<reason>\""
+            )
+            lines.append("")
+        elif not item.cluster:
+            printed_cluster = ""
+
+        indent = "  " if item.cluster else ""
+        lines.append(f"{indent}[{index}] {item.label}")
         sessions = len(item.sessions)
         lines.append(
-            f"    {item.count} trace(s) from {sessions} session(s), {span} old"
+            f"{indent}    {item.count} trace(s) from {sessions} session(s), {span} old"
             if sessions
-            else f"    {item.count} trace(s), {span} old"
+            else f"{indent}    {item.count} trace(s), {span} old"
         )
 
         # What the work was, before what to do about it. Judging an item without this means opening
-        # files, and an operator who has to open files to triage will not triage.
+        # files, and an operator who has to open files to triage will not triage. A clustered item
+        # already carries its subject in the label, so repeating it here is noise.
         summaries = item.summaries
-        for line in summaries[:SUMMARY_LINES]:
-            lines.append(f"    · {line}")
-        if len(summaries) > SUMMARY_LINES:
-            lines.append(f"    · … and {len(summaries) - SUMMARY_LINES} more")
-        blank = item.unsummarized
-        if blank:
-            lines.append(
-                f"    · ({blank} session(s) with no subject recorded — written before summaries "
-                "were captured)"
-            )
-        if not summaries:
-            lines.append(f"    · nothing here says what the work was — {cli} show {ref}")
+        if not item.cluster:
+            for line in summaries[:SUMMARY_LINES]:
+                lines.append(f"    · {line}")
+            if len(summaries) > SUMMARY_LINES:
+                lines.append(f"    · … and {len(summaries) - SUMMARY_LINES} more")
+            blank = item.unsummarized
+            if blank:
+                lines.append(
+                    f"    · ({blank} session(s) with no subject recorded — written before summaries "
+                    "were captured)"
+                )
+            if not summaries:
+                lines.append(f"    · nothing here says what the work was — {cli} show {ref}")
 
         if item.claimed_by:
-            lines.append(f"    claimed by: {item.claimed_by} — adopt files these traces into it")
-            lines.append(f"    adopt:      {cli} adopt {ref}")
+            lines.append(f"{indent}    claimed by: {item.claimed_by} — adopt files these traces into it")
+            lines.append(f"{indent}    adopt:      {cli} adopt {ref}")
         else:
             slug = item.proposed_slug(taken)
-            lines.append("    no stream claims this")
+            if not item.cluster:
+                lines.append("    no stream claims this")
             if slug:
                 taken = [*taken, slug]
-                lines.append(f"    proposed:   {slug}  (pass a different one as a second argument)")
-                lines.append(f"    adopt:      {cli} adopt {ref}")
+                if not item.cluster:
+                    lines.append(f"    proposed:   {slug}  (pass a different one as a second argument)")
+                lines.append(f"{indent}    adopt:      {cli} adopt {ref}" + (
+                    " <slug>" if item.cluster else ""
+                ))
             else:
                 lines.append(
-                    f"    proposed:   (none — no slug derivable; pass one: {cli} adopt {ref} <slug>)"
+                    f"{indent}    adopt:      {cli} adopt {ref} <slug>"
+                    if item.cluster
+                    else f"    proposed:   (none — no slug derivable; pass one: {cli} adopt {ref} <slug>)"
                 )
-        lines.append(f'    dismiss:    {cli} dismiss {ref} --why "<reason>"')
+        if not item.cluster:
+            lines.append(f'    dismiss:    {cli} dismiss {ref} --why "<reason>"')
 
-        for worktree in item.worktrees:
+        for worktree in item.worktrees if not item.cluster else []:
             lines.append(f"    worktree:   {worktree}")
         lines.append("")
 
@@ -866,13 +965,20 @@ class Adoption:
     stream: str
     minted: bool
     promotions: list[Promotion] = field(default_factory=list)
+    # Whether the caller supplied a real goal. Without this the renderer cannot tell a written goal
+    # from `ADOPTED_GOAL`, and told every mint its goal was a placeholder — including the ones that
+    # had just written one, which reads as `--goal` being ignored.
+    goal_supplied: bool = False
 
 
-def select_work_item(root: Path, selector: str) -> WorkItem:
-    """Resolve a listing index or a branch substring to exactly one work item.
+def select_work_items(root: Path, selector: str) -> list[WorkItem]:
+    """Every work item a selector names. One for most selectors; many for a cluster.
 
-    Ambiguity refuses rather than picking. Adoption mints a stream and files traces into it, so a
-    wrong guess here produces a real stream full of unrelated work — the failure `unassigned/`
+    A cluster selector (`repo@main`) deliberately resolves to all of its sessions, because clearing
+    a default branch's accumulated noise is one judgment and should cost one command. Adoption still
+    demands exactly one — see `select_work_item`.
+
+    Ambiguity refuses rather than picking. A write to a guessed target is the failure `unassigned/`
     exists to absorb, reintroduced at the step meant to drain it.
     """
     items = work_items(pending(root), vault.list_streams(root))
@@ -884,14 +990,20 @@ def select_work_item(root: Path, selector: str) -> WorkItem:
         index = int(selector)
         if not 1 <= index <= len(items):
             raise TraceError(f"No work item [{index}]. The queue has {len(items)}; run `list`.")
-        return items[index - 1]
+        return [items[index - 1]]
 
     # Exact forms first, so a branch that happens to be a substring of another one still resolves to
     # itself rather than being reported ambiguous.
     normalized = selector.replace(" @ ", "@")
     for item in items:
-        if normalized == item.key or selector in (item.branch, item.where):
-            return item
+        if normalized == item.key or selector in (item.session, item.session_ref, item.where):
+            return [item]
+    cluster = [item for item in items if item.cluster and normalized == item.cluster]
+    if cluster:
+        return cluster
+    exact_branch = [item for item in items if selector == item.branch]
+    if exact_branch:
+        return exact_branch
 
     needle = selector.lower()
     matches = [
@@ -900,17 +1012,35 @@ def select_work_item(root: Path, selector: str) -> WorkItem:
         if needle in item.branch.lower()
         or needle in item.repo.lower()
         or needle in item.where.lower()
+        or needle in item.session.lower()
+        or needle in item.label.lower()
     ]
     if not matches:
-        available = ", ".join(i.label for i in items)
+        available = ", ".join(i.selector(items) for i in items)
         raise TraceError(f"No work item matches {selector!r}. Waiting: {available}")
-    if len(matches) > 1:
+    clusters = {item.cluster for item in matches}
+    if len(matches) > 1 and not (len(clusters) == 1 and "" not in clusters):
         names = ", ".join(i.label for i in matches)
         raise TraceError(
             f"{selector!r} matches {len(matches)} work items ({names}). Narrow it, or use the "
-            f"index from `list` — adopting the wrong group files unrelated work into one stream."
+            f"selector `list` prints — acting on the wrong group files unrelated work into one stream."
         )
-    return matches[0]
+    return matches
+
+
+def select_work_item(root: Path, selector: str) -> WorkItem:
+    """Exactly one work item, or a refusal naming what to do instead."""
+    found = select_work_items(root, selector)
+    if len(found) == 1:
+        return found[0]
+    item = found[0]
+    raise TraceError(
+        f"{selector!r} names {len(found)} sessions on {item.repo} @ {item.branch}, not one piece of "
+        f"work. A default branch is where everyone stands, so nothing binds these together and one "
+        f"stream cannot honestly hold them. Adopt a single session by its reference from `list` "
+        f"(e.g. `{found[0].session_ref}`), or dismiss the whole set with "
+        f"`dismiss '{item.cluster}' --why \"...\"`."
+    )
 
 
 def adopt(
@@ -937,6 +1067,7 @@ def adopt(
     """
     item = select_work_item(root, selector)
     now = now or writer.utc_now()
+    goal_supplied = bool(goal.strip())
 
     if item.claimed_by:
         target, minted = item.claimed_by, False
@@ -950,11 +1081,19 @@ def adopt(
         claim_block = {kind: [] for kind in vault.CLAIM_KINDS}
         if item.repo != ABSENT:
             claim_block["repo"] = [item.repo]
-        # `main` is never claimed: it would resolve every stream in the repo and therefore none.
-        if item.branch not in (ABSENT, "main"):
+        # A default branch is never claimed: it would resolve every stream in the repo, and
+        # therefore none of them.
+        if item.branch != ABSENT and item.branch.lower() not in DEFAULT_BRANCHES:
             claim_block["branch"] = [item.branch]
-        claim_block["worktree"] = item.worktrees
-        claim_block["issue"] = claims_lib.parse_issue_keys(item.branch)
+        # A session-scoped item stood on a default branch, so its working directory is the repo's
+        # main clone — shared by everything in that repository. Claiming it would match every work
+        # item there, which is `main`-as-a-claim by another route: a worktree claim with no branch
+        # claim beside it is live whenever the directory exists. Work with no durable git handle
+        # gets none, and is reached by explicit declaration instead.
+        claim_block["worktree"] = [] if item.session else item.worktrees
+        claim_block["issue"] = claims_lib.parse_issue_keys(item.branch) or claims_lib.parse_issue_keys(
+            " ".join(item.summaries)
+        )
 
         _, minted = mint.create_stream(
             root,
@@ -964,7 +1103,7 @@ def adopt(
             claim_block=claim_block,
             now=now,
         )
-        if minted and not goal.strip():
+        if minted and not goal_supplied:
             # Filed as an operator ask rather than left implicit, so the placeholder goal surfaces on
             # the dashboard instead of quietly becoming permanent.
             writer.append_entry(
@@ -976,7 +1115,13 @@ def adopt(
         if trace.triaged:
             continue
         promotions.append(promote(root, trace.name, target, promoted_by=promoted_by, now=now))
-    return Adoption(item=item, stream=target, minted=minted, promotions=promotions)
+    return Adoption(
+        item=item,
+        stream=target,
+        minted=minted,
+        promotions=promotions,
+        goal_supplied=goal_supplied,
+    )
 
 
 def render_adoption(adoption: Adoption) -> str:
@@ -986,9 +1131,17 @@ def render_adoption(adoption: Adoption) -> str:
         f"{verb} streams/{adoption.stream} — {item.label}",
         f"promoted {len(adoption.promotions)} trace(s) into streams/{adoption.stream}/inbox/",
     ]
-    for worktree in item.worktrees:
+    for worktree in (item.worktrees if not item.session else []):
         lines.append(f"  claimed worktree: {worktree}")
-    if adoption.minted:
+    if adoption.minted and item.session:
+        lines.append(
+            "  No branch or worktree claimed: this ran on a default branch, so it has no git handle"
+        )
+        lines.append(
+            "  that would not also match everything else in the repo. Reach it explicitly:"
+        )
+        lines.append(f"    MESSAGE_BOARD_STREAM={adoption.stream}")
+    if adoption.minted and not adoption.goal_supplied:
         lines.append(
             f"Goal is a placeholder. Write it: python3 -m plugin.lib.writer section "
             f"{adoption.stream} Goal '<why this stream exists>'"
@@ -1021,13 +1174,15 @@ def dismiss(
             "is happening at all."
         )
 
-    item = select_work_item(root, selector)
+    # Plural on purpose: a cluster selector names every session on a default branch, and clearing
+    # that accumulated noise is one judgment, not thirteen.
+    items = select_work_items(root, selector)
     marker_dir = unassigned_dir(root) / DISMISSED_DIRNAME
     marker_dir.mkdir(parents=True, exist_ok=True)
     stamp = (now or writer.utc_now()).strftime(ISO_STAMP)
 
     dismissed = []
-    for trace in item.traces:
+    for trace in [trace for item in items for trace in item.traces]:
         if trace.triaged:
             continue
         marker = marker_dir / trace.name

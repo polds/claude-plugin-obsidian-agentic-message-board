@@ -351,8 +351,25 @@ Everything else.
   rationale-bearing, artifact-linked, and excellent, because they were **deliberately authored rather
   than inferred**. Honcho is a good store and an unreliable inferrer, which is exactly why decisions
   must be written to a brief and never inferred from conversation.
-- **Dashboard surface** — standalone TUI, or compiled into the Claude Code statusline? The
-  statusline is the only option with a negative pane-of-glass count.
+- **Dashboard surface** — *resolved 2026-08-20. **The Claude Code statusline, plus the existing
+  one-shot dashboard for detail. No background TUI.***
+
+  The statusline is the only surface the operator never has to choose to look at, and an escalation
+  nobody looks at is an escalation that did not happen. `plugin/statusline.py` prints one line —
+  needs-you count, the stream the dashboard would list first, inbox, adjudications, untriaged traces
+  — computed from the same `build_view` and the same `sort_key` the dashboard uses, so the two
+  surfaces can never disagree about what is most urgent. Everything the line cannot fit is one
+  `python3 -m plugin.dashboard` away, and that render already existed.
+
+  The TUI was rejected on cost, not on capability. It buys navigation of a read-only view and pays a
+  pane, a refresh loop, a key map, and a process that can die without saying so. Three segments are
+  load-bearing and should survive any rewrite: the needs-you segment renders even at zero (every
+  other segment is dropped when empty, so a silent line would be ambiguous between "clear" and "not
+  running"); segments drop whole rather than truncate (a shortened slug is indistinguishable from a
+  real one); and adjudications are counted as "to adjudicate", never as failures — the statusline is
+  the surface most likely to train a reflex, and that reflex must not be to dismiss.
+
+  Reopen only if glancing at the line stops being enough to know what to open.
 - **Untrusted content path.** Brief content shapes agent behavior. Low risk today; becomes the
   primary attack surface the moment an agent writes web, issue, or repo content into a brief. One
   design line now beats a retrofit later.

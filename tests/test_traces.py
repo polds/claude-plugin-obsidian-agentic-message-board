@@ -270,6 +270,39 @@ class TestTriageListing(VaultCase):
         self.assertIn(f"claimed by: {DESIGN}", text)
         self.assertNotIn("no stream claims this", text)
 
+    def test_a_worktree_claim_only_counts_while_it_is_still_live(self):
+        """The main clone is the working directory of everything in a repo.
+
+        A stream claiming that path matched every work item there, so the listing invited filing a
+        dozen unrelated sessions into one stream. The read path already refuses such a claim unless
+        the checkout is still on one of the stream's branches; the listing must refuse it too, or it
+        recommends what resolution would never do.
+        """
+        clone = self.vault / "clone"
+        clone.mkdir()
+        self.record(branch="other/work", cwd=str(clone))
+        streams = vault.list_streams(self.vault)
+        stream = next(b for b in streams if b.slug == DESIGN)
+        stream.claims["worktree"] = [str(clone)]
+        stream.claims["branch"] = ["some/feature"]
+
+        item = traces.work_items(traces.list_traces(self.vault), streams)[0]
+        self.assertEqual(item.claimed_by, "")
+        self.assertIn("no stream claims this", traces.render_queue(traces.list_traces(self.vault), streams))
+
+    def test_a_worktree_claim_with_no_branch_claim_still_counts(self):
+        """Paired with the refusal above: review and design streams have no branch to check."""
+        clone = self.vault / "clone"
+        clone.mkdir()
+        self.record(branch="other/work", cwd=str(clone))
+        streams = vault.list_streams(self.vault)
+        stream = next(b for b in streams if b.slug == DESIGN)
+        stream.claims["worktree"] = [str(clone)]
+        stream.claims["branch"] = []
+
+        item = traces.work_items(traces.list_traces(self.vault), streams)[0]
+        self.assertEqual(item.claimed_by, DESIGN)
+
     def test_many_traces_one_branch_render_as_one_work_item(self):
         """The queue's failure mode: fourteen files, two decisions."""
         for n in range(7):
@@ -697,6 +730,39 @@ class TestAdopt(VaultCase):
         self.assertEqual(brief.sections["Goal"], "Promote image tags.")
         self.assertEqual(brief.operator_asks(), [])
 
+    def test_a_supplied_goal_is_not_reported_as_a_placeholder(self):
+        """The output is the only thing the operator sees, so it must not contradict the brief.
+
+        Asserting on the brief alone let `render_adoption` tell every mint its goal was a
+        placeholder — including mints that had just written one — which reads as `--goal` being
+        silently ignored and gets the goal pointlessly rewritten by hand.
+        """
+        self.record()
+        adoption = self.adopt(slug="plat-1719-gclb", goal="Promote image tags.")
+        self.assertTrue(adoption.goal_supplied)
+        self.assertNotIn("placeholder", traces.render_adoption(adoption))
+
+    def test_a_missing_goal_is_reported_as_a_placeholder(self):
+        self.record()
+        adoption = self.adopt(slug="plat-1719-gclb")
+        self.assertFalse(adoption.goal_supplied)
+        self.assertIn("placeholder", traces.render_adoption(adoption))
+
+    def test_joining_an_existing_stream_never_claims_its_goal_is_a_placeholder(self):
+        """Joining writes no goal at all, so the hint would point at a brief it did not touch."""
+        self.record(branch="design-branch")
+        writer.append_entry(self.vault, DESIGN, "Next", "placeholder", now=FIXED_NOW)
+        path = vault.streams_dir(self.vault) / DESIGN / "BRIEF.md"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                "  branch: []", "  branch: [design-branch]"
+            ),
+            encoding="utf-8",
+        )
+        adoption = self.adopt()
+        self.assertFalse(adoption.minted)
+        self.assertNotIn("placeholder", traces.render_adoption(adoption))
+
     def test_an_ambiguous_selector_refuses_rather_than_picking(self):
         """Adopting the wrong group files unrelated work into one stream — the failure it drains."""
         self.record(branch="feat/one")
@@ -752,6 +818,83 @@ class TestShow(VaultCase):
         text = traces.render_item(traces.select_work_item(self.vault, "1"), now=FIXED_NOW)
         self.assertIn("never recorded", text)
         self.assertNotIn(f"summary: {writer.NO_SUMMARY}", text)
+
+
+class TestDefaultBranchIsNotAWorkItem(VaultCase):
+    """`main` names the repository, not the work.
+
+    The design already refuses to *claim* a default branch — it would resolve everything and
+    therefore nothing. Grouping on one has the same defect: thirteen unrelated sessions were being
+    offered for adoption into a single stream named `main`.
+    """
+
+    def busy_main(self):
+        self.record(branch="main", session="s1", summary="Investigate 503s in CI")
+        self.record(branch="main", session="s2", summary="Create Linear issues for the migration")
+        self.record(branch="main", session="s3", summary="Run the PR burndown skill")
+
+    def test_each_session_on_a_default_branch_is_its_own_item(self):
+        self.busy_main()
+        items = traces.work_items(traces.list_traces(self.vault))
+        self.assertEqual(len(items), 3)
+        self.assertEqual({i.session for i in items}, {"s1", "s2", "s3"})
+
+    def test_a_feature_branch_still_groups_as_one(self):
+        """Mutation check: the split is the default-branch rule, not per-session grouping returning."""
+        for n in range(3):
+            self.record(branch="feat/real-work", session=f"s{n}", summary=f"Step {n}")
+        items = traces.work_items(traces.list_traces(self.vault))
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].count, 3)
+
+    def test_the_listing_clusters_them_under_one_heading(self):
+        self.busy_main()
+        text = traces.render_queue(traces.list_traces(self.vault), now=FIXED_NOW, cli="traces")
+        self.assertIn("3 session(s), nothing shared", text)
+        self.assertIn("Investigate 503s in CI", text)
+        self.assertIn("dismiss all: traces dismiss", text)
+
+    def test_the_cluster_selector_dismisses_every_session_at_once(self):
+        """Most of what lands on a default branch is noise; clearing it must cost one command."""
+        self.busy_main()
+        dismissed = traces.dismiss(
+            self.vault, "n/a@main", why="routine work, no stream needed", now=FIXED_NOW
+        )
+        self.assertEqual(len(dismissed), 3)
+        self.assertEqual(traces.pending(self.vault), [])
+
+    def test_adopting_the_cluster_is_refused_with_what_to_do_instead(self):
+        self.busy_main()
+        with self.assertRaises(traces.TraceError) as caught:
+            traces.adopt(self.vault, "n/a@main", now=FIXED_NOW)
+        message = str(caught.exception)
+        self.assertIn("not one piece of work", message)
+        self.assertIn("dismiss", message)
+
+    def test_one_session_can_still_be_adopted_out_of_the_cluster(self):
+        self.busy_main()
+        adoption = traces.adopt(self.vault, "s2", slug="settler-gke-migration", now=FIXED_NOW)
+        self.assertEqual(len(adoption.promotions), 1)
+        self.assertEqual(len(traces.pending(self.vault)), 2)
+
+    def test_an_adopted_session_claims_no_branch_and_no_worktree(self):
+        """The clone is shared by everything in the repo.
+
+        A worktree claim with no branch claim beside it is live whenever the directory exists, so
+        claiming it here would match every work item in the repository — `main`-as-a-claim by
+        another route, and the exact bug this grouping change was made to fix.
+        """
+        self.busy_main()
+        adoption = traces.adopt(self.vault, "s1", slug="ci-503s", now=FIXED_NOW)
+        brief = vault.read_stream(self.vault, adoption.stream)
+        self.assertEqual(brief.claim("branch"), [])
+        self.assertEqual(brief.claim("worktree"), [])
+
+    def test_the_session_reference_is_the_selector_not_a_listing_position(self):
+        self.busy_main()
+        text = traces.render_queue(traces.list_traces(self.vault), now=FIXED_NOW, cli="traces")
+        self.assertIn("traces adopt 's1'", text)
+        self.assertNotIn("traces adopt 3 <slug>", text)
 
 
 class TestSelectorsSurviveTheQueueChanging(VaultCase):

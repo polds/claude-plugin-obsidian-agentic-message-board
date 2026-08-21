@@ -269,7 +269,10 @@ def _issue_template_from_base(base: str) -> str:
     if not base:
         return ""
     if "linear.app" in base:
-        return f"{base}/issue/{{key}}"
+        # An operator setting this copies the prefix they see in the browser, which already ends in
+        # `/issue`. Appending unconditionally yields `.../issue/issue/KEY` — a link that resolves to
+        # nothing but looks entirely plausible in a rendered brief, so nobody clicks it to find out.
+        return base + "/{key}" if base.endswith("/issue") else f"{base}/issue/{{key}}"
     return f"{base}/{{key}}"
 
 

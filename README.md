@@ -60,12 +60,40 @@ All commands run from the plugin root — a checkout of this repo, or the instal
 
 ```bash
 python3 -m plugin.dashboard                          # all streams, operator asks first
+python3 -m plugin.statusline                         # the same board as one line
 python3 -m plugin.lib.brief_read <slug>              # cold-start on one stream
 python3 -m plugin.lib.writer --help                  # record a decision (owner only)
 python3 -m plugin.lib.inbox --help                   # contribute as a non-owner
 python3 -m plugin.lib.traces --help                  # triage the unassigned queue
 python3 -m plugin.lib.doctor                         # is the board actually wired up?
 ```
+
+### The status line
+
+The dashboard is something you choose to read. The status line is the part you don't: one line
+telling you whether anything is waiting on you, always on screen. Wire it once, in
+`~/.claude/settings.json` for every project or `.claude/settings.json` for one:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "python3 /absolute/path/to/message-board/plugin/statusline.py",
+    "padding": 0
+  }
+}
+```
+
+```
+board  6 need you · top: message-board-design · 18 inbox · 1 to adjudicate · 48 untriaged
+```
+
+Every segment but the first is dropped when it is zero, so the line stays short on a quiet board.
+The needs-you segment always renders — including as `nothing needs you` — because a status line that
+can go blank cannot distinguish a clear board from one that stopped running. `top:` is the stream the
+dashboard would list first, computed from the same ordering, so the two surfaces cannot disagree
+about what is most urgent. When the vault is unset or missing, the line points at
+`python3 -m plugin.lib.doctor` rather than going quiet.
 
 ## Stream layout
 
@@ -115,6 +143,20 @@ session's own transcript for Claude Code's generated title, falling back to the 
 puts that one line in the trace header. Without it a queue entry is a commit hash and a directory —
 enough to group, nothing to judge — and an operator who has to open files to triage will not triage.
 `show` prints everything known about one item when the compressed listing is not enough.
+
+**A default branch is not a work item.** On a feature branch the branch identifies the work; on
+`main` it identifies the repository. Traces there are grouped per session instead, shown clustered
+under one heading, and addressed by a session reference. Adopting the cluster is refused — nothing
+binds those sessions together, and one stream cannot honestly hold them — but the heading is a
+bulk-`dismiss` handle, which is the common case. A stream adopted from such a session claims no
+branch and no worktree: the main clone is shared by everything in the repo, so claiming it would
+match every work item there.
+
+**Directories that only ever produce noise can be silenced.** Set `MESSAGE_BOARD_IGNORE` to a
+colon-separated list of paths in `settings.json` `env`. A rule never suppresses a directory inside a
+git repository, and never overrides a stream that claims it — so `~` is safe to write even though it
+is the parent of every checkout you own. `doctor` prints the active rules, because a silencing rule
+you forgot looks exactly like a broken hook.
 
 `dismiss` requires a reason, because "judged not worth a stream" and "silently dropped" are the same
 record without one. Dismissed and promoted traces both sweep on `prune`; untriaged ones never sweep

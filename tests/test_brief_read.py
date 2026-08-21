@@ -7,7 +7,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from plugin.lib import brief_read, vault  # noqa: E402
+from plugin.lib import brief_read, refs, vault  # noqa: E402
 
 FIXTURE_VAULT = REPO / "examples"
 
@@ -51,9 +51,24 @@ class TestRender(unittest.TestCase):
         self.assertIn("https://github.com/acme/platform/pull/1025", decided)
 
     def test_guessed_links_stay_out_of_the_body(self):
-        """A wrong link costs more than an unlinked reference — guesses belong in claims only."""
-        body = brief_read.render(self.review).split("## Goal")[1]
+        """A wrong link costs more than an unlinked reference — guesses belong in claims only.
+
+        `env={}` is load-bearing. With no issue base configured the tracker URL is *guessed* from the
+        repo owner, which is the case under test. Reading the ambient environment instead makes this
+        pass or fail on whether the developer happens to have set MESSAGE_BOARD_ISSUE_BASE.
+        """
+        body = brief_read.render(self.review, env={}).split("## Goal")[1]
         self.assertNotIn("linear.app", body)
+
+    def test_a_configured_issue_base_does_reach_the_body(self):
+        """Paired with the absence above: the rule is 'no guesses', not 'no issue links'.
+
+        Without this, the assertion above passes trivially on a renderer that emits no issue links
+        at all.
+        """
+        env = {refs.ISSUE_BASE_ENV: "https://linear.app/acme"}
+        body = brief_read.render(self.review, env=env).split("## Goal")[1]
+        self.assertIn("https://linear.app/acme/issue/PLAT-1719", body)
 
     def test_operator_asks_surfaced_for_active_stream(self):
         self.assertIn("need the operator", brief_read.render(self.design))
