@@ -26,6 +26,18 @@ from plugin.lib import traces, vault  # noqa: E402
 FIXTURES = REPO / "examples"
 
 
+def unsign(repo: str) -> None:
+    """Neutralize the developer's global git config inside a scratch repo.
+
+    Commit signing is configured globally on the machines this is developed on, and a scratch repo
+    inherits it: `git commit` then fails outright, or worse, blocks on a hardware key prompt and the
+    suite appears to hang. This is the same defect as a test shelling out to the operator's real
+    shell — a test that reads ambient configuration is testing the machine, not the code.
+    """
+    for key, value in (("commit.gpgsign", "false"), ("tag.gpgsign", "false")):
+        subprocess.run(["git", "-C", repo, "config", key, value], check=True)
+
+
 class ScratchVault(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -56,6 +68,7 @@ class TestObserve(unittest.TestCase):
             subprocess.run(["git", "init", "-q", tmp], check=True)
             subprocess.run(["git", "-C", tmp, "config", "user.email", "t@t"], check=True)
             subprocess.run(["git", "-C", tmp, "config", "user.name", "t"], check=True)
+            unsign(tmp)
             (Path(tmp) / "f.txt").write_text("x")
             subprocess.run(["git", "-C", tmp, "add", "-A"], check=True)
             subprocess.run(["git", "-C", tmp, "commit", "-qm", "initial"], check=True)
@@ -309,6 +322,78 @@ class TestTraceCarriesItsSubject(ScratchVault):
         self.assertIn("nothing here says what the work was", listing)
 
 
+class TestIgnoredDirectories(ScratchVault):
+    """Some directories host a session most days and never host work worth adopting.
+
+    Without a way to silence them the queue refills faster than it can be worked — ten traces from a
+    home directory in two days — and a backlog number that counts inevitable noise is a number the
+    operator learns to ignore, which is how triage stops happening.
+    """
+
+    def env(self, *paths):
+        return {session_end.IGNORE_ENV: os.pathsep.join(str(p) for p in paths)}
+
+    def test_an_ignored_directory_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outcome = session_end.run(self.root, elsewhere, session="s1", env=self.env(elsewhere))
+        self.assertEqual(outcome, "ignored")
+        self.assertEqual(traces.list_traces(self.root), [])
+
+    def test_a_directory_inside_an_ignored_one_is_ignored_too(self):
+        with tempfile.TemporaryDirectory() as parent:
+            child = Path(parent) / "deep" / "nested"
+            child.mkdir(parents=True)
+            outcome = session_end.run(self.root, str(child), session="s1", env=self.env(parent))
+        self.assertEqual(outcome, "ignored")
+
+    def test_an_unlisted_directory_still_traces(self):
+        """Paired with the suppressions above: the rule must not silence everything."""
+        with tempfile.TemporaryDirectory() as elsewhere, tempfile.TemporaryDirectory() as other:
+            outcome = session_end.run(self.root, elsewhere, session="s1", env=self.env(other))
+        self.assertEqual(outcome, "unassigned")
+        self.assertEqual(len(traces.list_traces(self.root)), 1)
+
+    def test_no_rule_configured_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as elsewhere:
+            self.assertEqual(session_end.run(self.root, elsewhere, session="s1", env={}), "unassigned")
+
+    def test_a_claimed_directory_still_records_ground_truth(self):
+        """An ignore rule silences noise; it must never override an explicit declaration."""
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outcome = session_end.run(
+                self.root,
+                elsewhere,
+                session="s1",
+                env={
+                    **self.env(elsewhere),
+                    session_end.session_start.STREAM_ENV: "message-board-design",
+                },
+            )
+        self.assertEqual(outcome, "message-board-design")
+
+    def test_a_rule_never_suppresses_a_git_checkout(self):
+        """`~` is the obvious rule to write and the parent of every repository.
+
+        Without this guard the one-line config that silences home-directory noise also silences the
+        entire board, and it does so invisibly — the queue simply stops filling.
+        """
+        with tempfile.TemporaryDirectory() as parent:
+            repo = Path(parent) / "code"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            outcome = session_end.run(self.root, str(repo), session="s1", env=self.env(parent))
+        self.assertEqual(outcome, "unassigned")
+        self.assertEqual(len(traces.list_traces(self.root)), 1)
+
+    def test_a_relative_or_symlinked_route_to_the_same_place_matches(self):
+        """A rule that silently fails to match is worse than no rule: the operator believes it works."""
+        with tempfile.TemporaryDirectory() as real:
+            link = Path(tempfile.mkdtemp()) / "link"
+            self.addCleanup(shutil.rmtree, link.parent, ignore_errors=True)
+            link.symlink_to(real)
+            self.assertTrue(session_end.is_ignored(str(link), self.env(real)))
+
+
 class TestTraceGrouping(ScratchVault):
     """A checkout no stream claims — the case that fills `unassigned/` in practice."""
 
@@ -320,6 +405,7 @@ class TestTraceGrouping(ScratchVault):
         run("git", "init", "-q", "-b", "feat/promote-tags", str(self.work))
         run("git", "-C", str(self.work), "config", "user.email", "t@t")
         run("git", "-C", str(self.work), "config", "user.name", "t")
+        unsign(str(self.work))
         run("git", "-C", str(self.work), "remote", "add", "origin",
             "git@github.com:acme/platform.git")
         (self.work / "f.txt").write_text("x")
@@ -359,3 +445,44 @@ class TestTraceGrouping(ScratchVault):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestResolvedSessionLeavesARecord(ScratchVault):
+    """A tracked session must leave the same one-line summary a trace would carry.
+
+    Before this, the sessions doing the most useful work — the tracked ones — left only a git
+    snapshot, and the operator could not tell "nothing happened" from "nothing was written".
+    """
+
+    def transcript(self, *records) -> str:
+        path = Path(tempfile.mkdtemp()) / "t.jsonl"
+        self.addCleanup(shutil.rmtree, path.parent, ignore_errors=True)
+        path.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+        return str(path)
+
+    def run_resolved(self, transcript=None) -> str:
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outcome = session_end.run(
+                self.root,
+                elsewhere,
+                env={session_end.session_start.STREAM_ENV: "message-board-design"},
+                transcript=transcript,
+            )
+        self.assertEqual(outcome, "message-board-design")
+        return (self.stream_dir("message-board-design") / "ground-truth.md").read_text()
+
+    def test_the_session_title_lands_in_ground_truth(self):
+        text = self.run_resolved(
+            self.transcript(
+                {"type": "ai-title", "aiTitle": "Fixing the flaky scrape"},
+                {"type": "user", "message": {"content": "please fix the scrape"}},
+            )
+        )
+        self.assertIn("- **Session:** Fixing the flaky scrape", text)
+        self.assertIn("- **Turns:** 1", text)
+
+    def test_a_missing_transcript_records_absence_not_a_gap(self):
+        """Paired presence/absence: the key still renders, carrying the explicit sentinel."""
+        text = self.run_resolved(transcript=None)
+        self.assertIn("- **Session:** no summary recorded", text)
+        self.assertIn("- **Turns:** 0", text)

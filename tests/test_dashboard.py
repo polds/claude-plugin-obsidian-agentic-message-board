@@ -366,3 +366,45 @@ class TestCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNothingLeftToGuess(unittest.TestCase):
+    """Absence renders as a statement, never as a missing line.
+
+    A dropped line makes the operator guess whether data is missing or hidden — the exact failure
+    the board exists to end. Each absence assertion is paired with the presence that replaces it.
+    """
+
+    def test_last_session_renders_when_the_hook_recorded_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gt = "- **Session:** Fixed the scrape\n- **Turns:** 3\n"
+            write_stream(tmp, "busy", "stream: busy\nstate: active\n", BASIC_BODY, ground_truth=gt)
+            out = dashboard.render(Path(tmp), now=NOW, width=WIDTH)
+            self.assertIn("last session: Fixed the scrape (3 turns)", out)
+
+    def test_missing_last_session_is_stated_not_omitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_stream(tmp, "quiet", "stream: quiet\nstate: active\n", BASIC_BODY)
+            out = dashboard.render(Path(tmp), now=NOW, width=WIDTH)
+            self.assertIn("last session: none recorded", out)
+
+    def test_missing_next_steps_are_stated_not_omitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_stream(tmp, "quiet", "stream: quiet\nstate: active\n", BASIC_BODY)
+            out = dashboard.render(Path(tmp), now=NOW, width=WIDTH)
+            self.assertIn("next: none recorded", out)
+
+    def test_present_next_steps_render_instead_of_the_absence_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            body = BASIC_BODY.replace("## Next\n", "## Next\n\n- ship the fix\n")
+            write_stream(tmp, "moving", "stream: moving\nstate: active\n", body)
+            out = dashboard.render(Path(tmp), now=NOW, width=WIDTH)
+            self.assertIn("next: ship the fix", out)
+            self.assertNotIn("next: none recorded", out)
+
+    def test_archived_streams_are_exempt_from_both_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_stream(tmp, "done", "stream: done\nstate: archived\n", BASIC_BODY)
+            out = dashboard.render(Path(tmp), now=NOW, width=WIDTH)
+            self.assertNotIn("last session:", out)
+            self.assertNotIn("next:", out)

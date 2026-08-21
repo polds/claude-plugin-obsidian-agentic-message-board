@@ -213,11 +213,22 @@ class StreamView:
     next_steps: list[str] = field(default_factory=list)
     inbox: list[str] = field(default_factory=list)
     signals: list[Adjudication] = field(default_factory=list)
+    last_session: str = ""
 
 
 def _clean_ask(ask: str) -> str:
     """Drop the `who: operator` tag — under a NEEDS OPERATOR heading it is noise."""
     return re.sub(r"[.\s]*`?\s*who:\s*operator\s*`?[.\s]*$", "", ask).strip()
+
+
+def _last_session(gt: GroundTruth) -> str:
+    """The hook-recorded summary of the most recent session on this stream, if any."""
+    session = gt.fact(r"^session$")
+    if not session or not session[1]:
+        return ""
+    turns = gt.fact(r"^turns$")
+    suffix = f" ({turns[1]} turns)" if turns and turns[1] not in ("", "0") else ""
+    return session[1] + suffix
 
 
 def build_view(brief: vault.Brief) -> StreamView:
@@ -233,6 +244,7 @@ def build_view(brief: vault.Brief) -> StreamView:
         next_steps=_items(brief.sections.get("Next", "")),
         inbox=inbox_entries(brief),
         signals=adjudications(brief, gt),
+        last_session=_last_session(gt),
     )
 
 
@@ -245,7 +257,7 @@ def _wrap(text: str, width: int, indent: str, hang: str | None = None) -> list[s
     ) or [indent + text]
 
 
-def _sort_key(view: StreamView) -> tuple:
+def sort_key(view: StreamView) -> tuple:
     """Operator escalations first, then most recently touched.
 
     Recency second because a stream that moved while the operator was away is the one whose context
@@ -282,10 +294,24 @@ def _render_stream(view: StreamView, now: datetime, width: int) -> list[str]:
     for ask in view.asks:
         lines.append("      " + textwrap.shorten(f"operator: {ask}", width=width - 6))
 
+    # Absence is rendered, not skipped. A dropped line makes the operator guess whether the data is
+    # missing or the surface is hiding it — and guessing is the exact failure this board exists to
+    # end. Archived streams are exempt: nothing further is expected of them.
+    if not brief.archived:
+        lines += _wrap(
+            f"last session: {view.last_session or 'none recorded — hook writes this on session end'}",
+            width, "      ", "            ",
+        )
+
     if view.next_steps:
         lines += _wrap(f"next: {view.next_steps[0]}", width, "      ", "            ")
         if len(view.next_steps) > 1:
             lines.append(f"      ...and {len(view.next_steps) - 1} more in ## Next")
+    elif not brief.archived:
+        lines += _wrap(
+            "next: none recorded — owner has not written ## Next",
+            width, "      ", "            ",
+        )
 
     for name in view.inbox:
         lines.append(f"      inbox: {name}")
@@ -303,8 +329,8 @@ def render(vault_root: Path, now: datetime | None = None, width: int | None = No
     width = width or _terminal_width()
 
     views = [build_view(brief) for brief in vault.list_streams(vault_root)]
-    active = sorted((v for v in views if not v.brief.archived), key=_sort_key)
-    archived = sorted((v for v in views if v.brief.archived), key=_sort_key)
+    active = sorted((v for v in views if not v.brief.archived), key=sort_key)
+    archived = sorted((v for v in views if v.brief.archived), key=sort_key)
     asks = [(v.brief.slug, ask) for v in views for ask in v.asks]
     inbox_total = sum(len(v.inbox) for v in views)
     signal_total = sum(len(v.signals) for v in views)

@@ -34,6 +34,49 @@ NOT_A_REPO = "not a git repository"
 # most useful thing a trace can carry.
 NO_SUMMARY = writer.NO_SUMMARY
 
+# Directories that never produce a trace, colon-separated, like PATH. A home directory or a scratch
+# folder hosts a session most days and none of them are work anyone will ever adopt, so without this
+# the queue refills faster than it can be worked and the backlog number stops meaning anything.
+#
+# Two guards keep a rule from silencing more than it was meant to. Suppression applies only when no
+# stream claims the directory — a claim is a deliberate declaration and its ground truth is still
+# written — and only when the directory is not inside a git repository, because a checkout always
+# might be real work. The second guard is what makes `~` a safe rule to write: it is the parent of
+# every noisy session and also the parent of every repository.
+IGNORE_ENV = "MESSAGE_BOARD_IGNORE"
+
+
+def ignored_dirs(env: dict[str, str] | None = None) -> list[Path]:
+    env = os.environ if env is None else env
+    out = []
+    for raw in (env.get(IGNORE_ENV, "") or "").split(os.pathsep):
+        raw = raw.strip()
+        if raw:
+            out.append(Path(raw).expanduser())
+    return out
+
+
+def is_ignored(cwd: str, env: dict[str, str] | None = None) -> bool:
+    """True when `cwd` is an ignored directory or sits inside one.
+
+    Compared as resolved paths rather than strings so `~/x`, `/Users/me/x`, and a symlinked route to
+    the same place all agree — a rule that silently fails to match is worse than no rule, because the
+    operator believes the noise is handled.
+    """
+    try:
+        here = Path(cwd).expanduser().resolve()
+    except (OSError, ValueError):
+        return False
+    for rule in ignored_dirs(env):
+        try:
+            resolved = rule.resolve()
+        except (OSError, ValueError):
+            continue
+        if here == resolved or resolved in here.parents:
+            return True
+    return False
+
+
 # Guardrail for a pathological transcript. A 6 MB file scans in ~8 ms with the substring pre-filter
 # below, so this is far above anything real — it exists so a hook can never hang a session shutdown.
 TRANSCRIPT_BYTE_LIMIT = 64 * 1024 * 1024
@@ -216,6 +259,11 @@ def run(
     resolution = claims.resolve_for_read(streams, hints)
 
     if resolution.stream is None:
+        # An ignore rule silences directories that are not work — and a git checkout always might be.
+        # Without this, the obvious rule to write (`~`, the parent of every noisy session) is also
+        # the parent of every repository, and would suppress the whole board in one config line.
+        if facts["repo"] == NOT_A_REPO and is_ignored(cwd, env):
+            return "ignored"
         session_facts = observe_session(transcript)
         body = [f"- **{k.capitalize()}:** {v}" for k, v in facts.items()]
         # Recorded even when empty. A trace that shows only what it *could* observe reads as though
@@ -240,6 +288,13 @@ def run(
         )
         return "unassigned"
 
+    # The same summary a trace would carry, recorded for tracked sessions too. Before this, a
+    # tracked session ended leaving only a git snapshot: the sessions doing the most useful work
+    # left the least record, and the operator could not tell "nothing happened" from "nothing was
+    # written". Title and turn count are read off the transcript — observation, not judgment.
+    session_facts = observe_session(transcript)
+    facts["session"] = summarize(session_facts)
+    facts["turns"] = session_facts["turns"]
     write_ground_truth(root, resolution.stream.slug, facts)
     return resolution.stream.slug
 
