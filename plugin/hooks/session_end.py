@@ -45,6 +45,20 @@ NO_SUMMARY = writer.NO_SUMMARY
 # every noisy session and also the parent of every repository.
 IGNORE_ENV = "MESSAGE_BOARD_IGNORE"
 
+# Hard opt-out for sessions that are not the operator working: headless fleets, dispatchers,
+# scripted subprocesses. An ignore rule is scoped to a directory and deliberately never silences a
+# git checkout; automation runs *inside* real checkouts all the time, which is how one triage
+# pipeline left ~180 traces in a week. The dispatcher knows it is automation — the hook cannot — so
+# the dispatcher says so, and a session carrying this flag writes nothing at all: no trace, no
+# ground truth. Any value but empty/"0"/"false"/"no"/"off" disables, so a well-meant
+# MESSAGE_BOARD_DISABLE=true cannot silently fail to disarm.
+DISABLE_ENV = "MESSAGE_BOARD_DISABLE"
+
+
+def is_disabled(env: dict[str, str] | None = None) -> bool:
+    env = os.environ if env is None else env
+    return (env.get(DISABLE_ENV, "") or "").strip().lower() not in ("", "0", "false", "no", "off")
+
 
 def ignored_dirs(env: dict[str, str] | None = None) -> list[Path]:
     env = os.environ if env is None else env
@@ -252,7 +266,15 @@ def run(
     Resolution here reuses the read-path ladder deliberately. These are observations, not judgments:
     recording them against a wrong stream is recoverable and visible, whereas refusing to record
     anything loses the only evidence that is independent of agent self-report.
+
+    The disable check comes before everything, including resolution: an opted-out session writes
+    nothing even when a stream would resolve, because the flag means "this process is not the
+    operator working" and ground truth from automation would overwrite the record of the session
+    that was. The statusline's `this:` segment mirrors this ladder — disable first — so what it
+    promises is what happens here.
     """
+    if is_disabled(env):
+        return "disabled"
     facts = observe(cwd)
     hints = session_start.gather_hints(cwd, env=env)
     streams = [b for b in vault.list_streams(root) if b.resolvable]

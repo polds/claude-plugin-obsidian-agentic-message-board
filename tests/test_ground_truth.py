@@ -486,3 +486,60 @@ class TestResolvedSessionLeavesARecord(ScratchVault):
         text = self.run_resolved(transcript=None)
         self.assertIn("- **Session:** no summary recorded", text)
         self.assertIn("- **Turns:** 0", text)
+
+
+class TestDisabledSessions(ScratchVault):
+    """MESSAGE_BOARD_DISABLE is the dispatcher's word that a session is automation, not work.
+
+    One triage pipeline left ~180 traces in a week, most from inside real checkouts where an
+    ignore rule deliberately cannot reach. The flag writes nothing at all — and the check runs
+    before resolution, because ground truth from a fleet worker would overwrite the record of the
+    operator session the board exists to describe.
+    """
+
+    def test_a_disabled_session_writes_no_trace(self):
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outcome = session_end.run(
+                self.root, elsewhere, session="s1", env={session_end.DISABLE_ENV: "1"}
+            )
+        self.assertEqual(outcome, "disabled")
+        self.assertEqual(traces.list_traces(self.root), [])
+
+    def test_disable_wins_even_when_a_stream_resolves(self):
+        """The check precedes resolution: a resolvable automation session still writes nothing."""
+        target = self.stream_dir("message-board-design") / session_end.GROUND_TRUTH_FILE
+        before = target.read_text() if target.is_file() else None
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outcome = session_end.run(
+                self.root,
+                elsewhere,
+                session="s1",
+                env={
+                    session_end.DISABLE_ENV: "1",
+                    session_end.session_start.STREAM_ENV: "message-board-design",
+                },
+            )
+        self.assertEqual(outcome, "disabled")
+        after = target.read_text() if target.is_file() else None
+        self.assertEqual(before, after)
+
+    def test_the_same_session_without_the_flag_still_writes(self):
+        """Presence pair for the absences above: the flag is the difference, not the setup."""
+        with tempfile.TemporaryDirectory() as elsewhere:
+            outcome = session_end.run(
+                self.root,
+                elsewhere,
+                session="s1",
+                env={session_end.session_start.STREAM_ENV: "message-board-design"},
+            )
+        self.assertEqual(outcome, "message-board-design")
+        target = self.stream_dir("message-board-design") / session_end.GROUND_TRUTH_FILE
+        self.assertTrue(target.is_file())
+
+    def test_only_a_real_value_disarms(self):
+        """`=true` from a well-meaning dispatcher must not silently fail to disable."""
+        for value in ("1", "true", "TRUE", "yes", "on", "anything"):
+            self.assertTrue(session_end.is_disabled({session_end.DISABLE_ENV: value}), value)
+        for value in ("", "0", "false", "no", "off", " "):
+            self.assertFalse(session_end.is_disabled({session_end.DISABLE_ENV: value}), repr(value))
+        self.assertFalse(session_end.is_disabled({}))

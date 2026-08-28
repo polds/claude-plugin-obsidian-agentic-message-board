@@ -389,6 +389,20 @@ class TestSessionSegment(VaultCase):
         )
         self.assertNotIn("this:", statusline.format_line(summary, width=200))
 
+    def test_a_disabled_session_says_so_even_when_a_stream_would_resolve(self):
+        """Mirrors the hook's ladder: disable precedes resolution, so no stream may be named."""
+        env = {"MESSAGE_BOARD_DISABLE": "1", "MESSAGE_BOARD_STREAM": "tracked-stream"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            seg = statusline.session_segment(self.root, self.tmp.name)
+        self.assertEqual(seg, "this: disabled (nothing written on exit)")
+
+    def test_without_the_flag_the_same_session_resolves(self):
+        """Presence pair: the flag is the only difference between these two states."""
+        with mock.patch.dict(os.environ, {"MESSAGE_BOARD_STREAM": "tracked-stream"}, clear=False):
+            os.environ.pop("MESSAGE_BOARD_DISABLE", None)
+            seg = statusline.session_segment(self.root, self.tmp.name)
+        self.assertEqual(seg, "this: tracked-stream")
+
     def test_payload_cwd_prefers_the_explicit_field(self):
         self.assertEqual(statusline.payload_cwd({"cwd": "/a"}), "/a")
         self.assertEqual(statusline.payload_cwd({"workspace": {"current_dir": "/b"}}), "/b")

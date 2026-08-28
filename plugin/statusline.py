@@ -82,7 +82,7 @@ def summarize(vault_root: Path) -> Summary:
     )
 
 
-def session_segment(vault_root: Path, cwd: str) -> str:
+def session_segment(vault_root: Path, cwd: str, env: dict[str, str] | None = None) -> str:
     """Where *this* session stands with the board, stated so nothing is left to guess.
 
     The board-wide counts answer "is anything waiting on me?"; this answers the question the
@@ -92,8 +92,13 @@ def session_segment(vault_root: Path, cwd: str) -> str:
     tracked, and that ambiguity is what erodes trust in the whole surface.
 
     The states mirror `session_end.run` exactly — this segment is a promise about what that hook
-    will do, so the two must share one resolution ladder or the promise is a lie.
+    will do, so the two must share one resolution ladder or the promise is a lie. That is why the
+    disable check comes first, before resolution: the hook bails on the flag before resolving, so a
+    disabled session that *would* resolve must still say "disabled", not name a stream it will
+    never write to.
     """
+    if session_end.is_disabled(env):
+        return "this: disabled (nothing written on exit)"
     hints = session_start.gather_hints(cwd)
     streams = [b for b in vault.list_streams(vault_root) if b.resolvable]
     resolution = claims.resolve_for_read(streams, hints)
@@ -102,7 +107,7 @@ def session_segment(vault_root: Path, cwd: str) -> str:
     if resolution.ambiguous:
         return f"this: ambiguous ({len(resolution.candidates)} streams match)"
     in_repo = session_start._git(["rev-parse", "--is-inside-work-tree"], cwd) == "true"
-    if not in_repo and session_end.is_ignored(cwd):
+    if not in_repo and session_end.is_ignored(cwd, env):
         return "this: ignored (nothing written on exit)"
     return "this: untracked (trace on exit)"
 
